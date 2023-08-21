@@ -23,10 +23,10 @@ def run_script_on_device(device_ip, admin_creds_list, admin_pw):
             net_connect.disconnect()
 
             # Determine whether 'Extended IP access list VTY_Internal_ACL' is in the output
-            is_true = 'Extended IP access list VTY_Internal_ACL' in output
+            is_true = '10.250.6.0 0.0.0.255' in output
 
             # Create the appropriate file name based on the 'is_true' value
-            save_file_name = "True.txt" if is_true else "False.txt"
+            save_file_name = "True_Done.txt" if is_true else "False_Not_Done.txt"
             with open(save_file_name, "a") as save_file:
                 save_file.write(f"IP address: {device_ip}\n{output}\n")
 
@@ -38,7 +38,7 @@ def run_script_on_device(device_ip, admin_creds_list, admin_pw):
 if __name__ == "__main__":
     # Example list of IP addresses, you can modify this as needed
     ip_addresses = []
-    with open('ip_addresses.txt', 'r') as f:
+    with open('True.txt', 'r') as f:
         for line in f:
             ip_addresses.append(line.strip())
     admin_creds_list = input('Enter the username(s) separated by commas: ').split(',')
