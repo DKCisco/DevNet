@@ -1,3 +1,14 @@
+import time
+def read_from_channel(channel):
+    output = ""
+    while True:
+        if channel.recv_ready():
+            output += channel.recv(65535).decode()
+        else:
+            time.sleep(2)
+            if not channel.recv_ready():
+                break
+    return output
 
 import paramiko
 import maskpass
@@ -38,7 +49,7 @@ channel.send('show run\n')
 time.sleep(2)  # Giving some time for the command to execute
 
 # Capturing the output
-output = channel.recv(65535).decode()
+output = read_from_channel(channel)
 
 # Closing the SSH connection
 ssh.close()
