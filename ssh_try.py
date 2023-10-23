@@ -4,7 +4,7 @@ import maskpass
 
 def ssh_connect(ip, username, password, delay=5):
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # This is just for demonstration purposes. Be cautious about accepting unknown host keys.
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     attempts = 0
     while True:
