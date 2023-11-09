@@ -20,10 +20,10 @@ def run_script_on_device(device_ip, admin_creds_list, admin_pw, failed_attempts)
         try:
             net_connect = ConnectHandler(**iosv_l2)
             net_connect.enable()
-            output = net_connect.send_command('show ip access-list | b VTY_Internal_ACL')
+            output = net_connect.send_command('show ip access-list | b ACL')
             net_connect.disconnect()
 
-            # Determine whether '10.250.6.0' is in the output
+            # Determine whether given wildcard bits is in the output
             is_true = '0.0.1.255' in output
 
             # Create the appropriate file name based on the 'is_true' value

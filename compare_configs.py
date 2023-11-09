@@ -28,4 +28,4 @@ def write_to_csv(output_file, differences):
         writer.writerows(differences)
 
 # Usage example
-compare_configs('OT-ENG-ACC-SW-01_7723.txt', 'BL-LoneTree-SWSTK_7623.txt', 'config_diff.csv')
+compare_configs('SW-01.txt', 'SWSTK_2.txt', 'config_diff.csv')
