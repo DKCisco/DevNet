@@ -15,6 +15,7 @@ def run_commands_and_extract_info(input_csv_file, commands):
         input_csv_file (str): Path to a CSV file with 'Hostname' and 'IP Address' columns.
         commands (list): A list of commands to execute on the switches.
                          Can contain {IP_ADDR_VAR} for the device's own IP.
+                         {INTERFACE_NAME_VAR} will be dynamically replaced after discovery.
     """
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -43,6 +44,7 @@ def run_commands_and_extract_info(input_csv_file, commands):
                 row['Error Message'] = ''
                 row['IOS Version'] = ''
                 row['Serial Number'] = ''
+                row['Interface Name'] = '' # New column for the interface
                 row['Base MAC Address'] = ''
                 devices_data.append(row)
     except FileNotFoundError:
@@ -62,13 +64,28 @@ def run_commands_and_extract_info(input_csv_file, commands):
         return
 
     # Prepare for writing output CSV after processing all devices
-    output_fieldnames = list(devices_data[0].keys()) if devices_data else ['Hostname', 'IP Address', 'Status', 'Error Message', 'IOS Version', 'Serial Number', 'Base MAC Address']
+    # Ensure all possible new columns are in the header
+    output_fieldnames = list(devices_data[0].keys()) if devices_data else []
+    additional_fields = ['Status', 'Error Message', 'IOS Version', 'Serial Number', 'Interface Name', 'Base MAC Address', 'Last Command Output']
+    for field in additional_fields:
+        if field not in output_fieldnames:
+            output_fieldnames.append(field)
 
 
     with open(main_log_file, 'a') as f_main_log, open(error_log_file, 'a') as f_error_log:
         for device in devices_data:
             hostname = device.get('Hostname', 'N/A')
             ip_address = device.get('IP Address', 'N/A')
+            
+            # Reset values for each iteration in case of previous failures
+            device['Status'] = 'Pending'
+            device['Error Message'] = ''
+            device['IOS Version'] = ''
+            device['Serial Number'] = ''
+            device['Interface Name'] = ''
+            device['Base MAC Address'] = ''
+            device['Last Command Output'] = ''
+
 
             f_main_log.write(f"--- Processing Device: {hostname} ({ip_address}) ---\n")
             print(f"--- Processing Device: {hostname} ({ip_address}) ---")
@@ -133,12 +150,24 @@ def run_commands_and_extract_info(input_csv_file, commands):
                         print("Entered enable mode.")
 
                     show_version_output = ""
-                    show_mac_output = ""
+                    show_ip_int_brief_output_for_ip = ""
+                    show_interface_detail_output = ""
                     last_command_output = "" # For the CSV column
 
+                    # Execute commands one by one
                     for i, command_template in enumerate(commands):
-                        # Substitute {IP_ADDR_VAR} with the current device's IP
-                        command_to_execute = command_template.replace("{IP_ADDR_VAR}", ip_address)
+                        command_to_execute = command_template
+
+                        # Handle dynamic variables
+                        if "{IP_ADDR_VAR}" in command_template:
+                            command_to_execute = command_template.replace("{IP_ADDR_VAR}", ip_address)
+                        elif "{INTERFACE_NAME_VAR}" in command_template:
+                            # This command should only be executed if interface name is known
+                            if not device['Interface Name']:
+                                f_main_log.write(f"Skipping command '{command_template}': Interface name not yet discovered for {ip_address}.\n")
+                                print(f"Skipping command '{command_template}': Interface name not yet discovered for {ip_address}.")
+                                continue
+                            command_to_execute = command_template.replace("{INTERFACE_NAME_VAR}", device['Interface Name'])
 
                         f_main_log.write(f"Executing command: {command_to_execute}\n")
                         print(f"Executing command: {command_to_execute}")
@@ -149,22 +178,40 @@ def run_commands_and_extract_info(input_csv_file, commands):
                         # Store specific command outputs for parsing
                         if "show version" in command_to_execute.lower() and "terminal length" not in command_to_execute.lower():
                             show_version_output = output
-                        if "show mac address-table" in command_to_execute.lower() and "terminal length" not in command_to_execute.lower():
-                            show_mac_output = output
+                        if "show ip interface brief" in command_to_execute.lower() and ip_address in command_to_execute:
+                            show_ip_int_brief_output_for_ip = output
+                        if "show interface" in command_to_execute.lower() and device['Interface Name'] and device['Interface Name'] in command_to_execute:
+                            show_interface_detail_output = output
 
-                        # If this is the last command, store its output for CSV's "Show Command Output"
+                        # If this is the last command in the original list, store its output for CSV's "Last Command Output"
                         if i == len(commands) - 1:
                             last_command_output = output.strip()
 
-                    f_main_log.write(f"--- Finished commands for {hostname} ({ip_address}) ---\n\n")
-                    print(f"--- Finished commands for {hostname} ({ip_address}) ---\n")
-
-                    # Parse outputs and update device data
+                    # --- After all commands, perform parsing ---
                     device['IOS Version'] = parse_ios_version(show_version_output)
                     device['Serial Number'] = parse_serial_number(show_version_output)
-                    device['Base MAC Address'] = parse_base_mac_address(show_version_output, show_mac_output)
+
+                    # Extract Interface Name (crucial for subsequent MAC discovery)
+                    extracted_interface = parse_interface_name(show_ip_int_brief_output_for_ip, ip_address)
+                    device['Interface Name'] = extracted_interface
+
+                    # Now, if we found an interface, we can try to get its MAC
+                    if extracted_interface:
+                        # Re-run or specifically run 'show interface <interface_name>' to get MAC
+                        f_main_log.write(f"Dynamically executing: show interface {extracted_interface}\n")
+                        print(f"Dynamically executing: show interface {extracted_interface}")
+                        mac_detail_output = net_connect.send_command(f"show interface {extracted_interface}")
+                        f_main_log.write(f"Command Output (show interface {extracted_interface}):\n{mac_detail_output}\n")
+                        print(f"Command Output (show interface {extracted_interface}):\n{mac_detail_output}")
+                        device['Base MAC Address'] = parse_mac_from_show_interface(mac_detail_output)
+                    else:
+                        f_main_log.write(f"Could not determine primary interface for {ip_address}. Skipping MAC address retrieval.\n")
+                        print(f"Could not determine primary interface for {ip_address}. Skipping MAC address retrieval.")
+                        device['Base MAC Address'] = "N/A - Interface Not Found"
+
+
                     device['Status'] = 'Success'
-                    # The 'Show Command Output' column for the last command is dynamically added below
+                    device['Last Command Output'] = last_command_output # Assign the last command's output
 
             except netmiko.NetmikoTimeoutException:
                 device['Status'] = 'SSH Timeout'
@@ -185,15 +232,8 @@ def run_commands_and_extract_info(input_csv_file, commands):
                 print(f"An unexpected SSH error occurred for {ip_address}: {e}\n")
                 f_error_log.write(f"{datetime.datetime.now()}: Unexpected SSH error for {hostname} ({ip_address}): {e}\n")
 
-            # Add the last command output to the device data structure
-            device['Last Command Output'] = last_command_output
-
     # 3. Write all collected data to the new CSV
     try:
-        # Ensure 'Last Command Output' is in the header, add if not already present
-        if 'Last Command Output' not in output_fieldnames:
-            output_fieldnames.append('Last Command Output')
-
         with open(output_csv_file, mode='w', newline='', encoding='utf-8') as outfile:
             writer = csv.DictWriter(outfile, fieldnames=output_fieldnames)
             writer.writeheader()
@@ -217,29 +257,36 @@ def parse_serial_number(output):
     match = re.search(r"Processor board ID\s+(\S+)", output)
     if match:
         return match.group(1).strip()
-    # Sometimes just "Serial Number :" is used, e.g., on Nexus or older devices
-    match = re.search(r"Serial Number\s+:\s+(\S+)", output)
+    match = re.search(r"Serial Number\s+:\s+(\S+)", output) # For devices that use this format
     if match:
         return match.group(1).strip()
     return "N/A"
 
-def parse_base_mac_address(show_version_output, show_mac_address_table_output=""):
+def parse_interface_name(output, ip_address):
     """
-    Parses base Ethernet MAC address from 'show version' output.
-    Falls back to the first MAC from 'show mac address-table' if not found.
+    Parses the interface name from 'show ip interface brief | include <IP>' output.
+    Assumes the IP address is directly included in the command for filtering.
     """
-    # Try to find specific base MAC address in show version
-    match = re.search(r"(?:Base Ethernet MAC Address|MAC Address)\s*:\s*([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})", show_version_output)
+    # Escaping IP address for regex to handle dots correctly
+    ip_regex = re.escape(ip_address)
+    # Regex to find the interface name (first word) followed by the IP address on the same line
+    # ^(\S+)\s+: matches interface at start of line
+    # .*?: non-greedy match for anything between interface and IP
+    # \s+UP\s+(?:up|down): to confirm the line is likely for an active interface
+    match = re.search(r"^(\S+)\s+"+ ip_regex + r"\s+(?:YES|NO)\s+(?:manual|NVRAM|unset)\s+(up|down)\s+(up|down)", output, re.MULTILINE | re.IGNORECASE)
     if match:
-        return match.group(1).upper() # Ensure consistent casing
+        return match.group(1).strip() # Capture the interface name
+    return "N/A"
 
-    # Fallback: Try to get the first MAC from show mac address-table
-    if show_mac_address_table_output:
-        # This regex looks for a 4-digit.4-digit.4-digit MAC format
-        mac_match = re.search(r"\s+([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})\s+", show_mac_address_table_output)
-        if mac_match:
-            return mac_match.group(1).upper()
-
+def parse_mac_from_show_interface(output):
+    """
+    Parses the MAC address from 'show interface <interface>' output.
+    Looks for "address is AAAA.BBBB.CCCC (bia AAAA.BBBB.CCCC)" or similar patterns.
+    """
+    # Regex to find "address is" followed by the MAC (4.4.4 format)
+    match = re.search(r"address is\s+([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})", output)
+    if match:
+        return match.group(1).upper()
     return "N/A"
 
 if __name__ == "__main__":
@@ -247,24 +294,26 @@ if __name__ == "__main__":
 
     # Define the commands you want to run on the switches.
     # {IP_ADDR_VAR} will be replaced by the device's IP address.
+    # {INTERFACE_NAME_VAR} will be dynamically determined and replaced by the script.
     # The LAST command's output will populate the 'Last Command Output' column in the CSV.
     switch_commands = [
-        "terminal length 0", # Important: Prevents pagination for full output
-        "show version", # Needed for IOS Version, Serial Number, Base MAC
-        "show mac address-table", # Needed for Base MAC fallback
-        "show ip route {IP_ADDR_VAR}", # Example: Command using the device's own IP as a variable
-        "show interface status", # This will be the output saved to the 'Last Command Output' CSV column
-        "terminal no length" # Reset terminal length
+        "terminal length 0",
+        "show version", # Needed for IOS Version, Serial Number
+        "show ip interface brief | include {IP_ADDR_VAR}", # Essential for finding the interface name
+        # "show interface {INTERFACE_NAME_VAR}" will be run dynamically after interface discovery
+        "show interface status", # Example of another command. This output will be 'Last Command Output'
+        "terminal no length"
     ]
 
     # --- Dummy CSV File Creation for Demonstration (REMOVE IN PRODUCTION) ---
+    # This block creates a sample devices.csv if it doesn't exist.
     if not os.path.exists(input_devices_csv):
         print(f"Creating a dummy '{input_devices_csv}' for demonstration purposes.")
         dummy_data = [
-            {'Hostname': 'SwitchA', 'IP Address': '192.168.1.10'},
-            {'Hostname': 'SwitchB', 'IP Address': '192.168.1.11'}, # Will likely fail if not a real device
-            {'Hostname': 'RouterC', 'IP Address': '10.0.0.1'},
-            {'Hostname': 'SwitchD', 'IP Address': '172.16.0.254'}
+            {'Hostname': 'TestSwitch1', 'IP Address': '192.168.1.10'}, # Replace with real IPs
+            {'Hostname': 'TestSwitch2', 'IP Address': '192.168.1.11'},
+            {'Hostname': 'TestRouter3', 'IP Address': '10.0.0.1'},
+            {'Hostname': 'TestSwitch4', 'IP Address': '172.16.0.254'}
         ]
         with open(input_devices_csv, mode='w', newline='', encoding='utf-8') as outfile:
             writer = csv.DictWriter(outfile, fieldnames=['Hostname', 'IP Address'])
