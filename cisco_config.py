@@ -1,11 +1,11 @@
-import paramiko # Changed from netmiko
+import paramiko
 import getpass
 import os
 import datetime
 import subprocess
 import csv
-import re # For regular expressions to parse show command output
-import time # For delays in paramiko interaction
+import re
+import time
 
 # --- Paramiko Helper Functions (Crucial for interaction) ---
 def read_until_prompt(channel, prompt="#", timeout=5):
@@ -14,12 +14,10 @@ def read_until_prompt(channel, prompt="#", timeout=5):
     start_time = time.time()
     while not output.strip().endswith(prompt) and (time.time() - start_time < timeout):
         if channel.recv_ready():
-            output += channel.recv(65535).decode('utf-8', errors='ignore') # Read larger chunks
+            output += channel.recv(65535).decode('utf-8', errors='ignore')
         else:
-            time.sleep(0.05) # Small delay to prevent busy-waiting
+            time.sleep(0.05)
 
-    # Clean up output: remove prompt, and potentially the echoed command
-    # This part is simplified and might need tuning for very complex prompts/echoes
     cleaned_output = output.strip()
     if cleaned_output.endswith(prompt):
         cleaned_output = cleaned_output[:-len(prompt)].strip()
@@ -28,16 +26,13 @@ def read_until_prompt(channel, prompt="#", timeout=5):
 def send_command_and_read(channel, command, prompt="#", timeout=5):
     """Sends a command and reads output until the prompt is found."""
     channel.send(command + "\n")
-    # Read once to clear the echoed command, then read for actual output + prompt
-    time.sleep(0.1) # Give time for echo
+    time.sleep(0.1)
     initial_read = ""
     if channel.recv_ready():
         initial_read = channel.recv(65535).decode('utf-8', errors='ignore')
 
     output = read_until_prompt(channel, prompt, timeout)
 
-    # Attempt to remove the echoed command from the output.
-    # This can be tricky; a more robust solution might check for the prompt before sending.
     if initial_read.strip().endswith(command):
         output = output.replace(initial_read.strip(), "", 1).strip()
     elif output.startswith(command):
@@ -71,18 +66,16 @@ def run_commands_and_extract_info(input_csv_file, commands):
     password = getpass.getpass("Enter SSH password: ")
     enable_password = getpass.getpass("Enter Enable password (if different from SSH password, else press Enter): ")
     if not enable_password:
-        enable_password = password # Use SSH password as enable password if not provided
+        enable_password = password
 
     devices_data = []
 
-    # 1. Read input CSV
     try:
         with open(input_csv_file, mode='r', newline='', encoding='utf-8') as infile:
             reader = csv.DictReader(infile)
             if 'Hostname' not in reader.fieldnames or 'IP Address' not in reader.fieldnames:
                 raise ValueError("Input CSV must contain 'Hostname' and 'IP Address' columns.")
             for row in reader:
-                # Initialize new columns for each device
                 row['Status'] = 'Pending'
                 row['Error Message'] = ''
                 row['IOS Version'] = ''
@@ -118,7 +111,6 @@ def run_commands_and_extract_info(input_csv_file, commands):
             hostname = device.get('Hostname', 'N/A')
             ip_address = device.get('IP Address', 'N/A')
 
-            # Reset values for each iteration in case of previous failures
             device['Status'] = 'Pending'
             device['Error Message'] = ''
             device['IOS Version'] = ''
@@ -131,7 +123,6 @@ def run_commands_and_extract_info(input_csv_file, commands):
             f_main_log.write(f"--- Processing Device: {hostname} ({ip_address}) ---\n")
             print(f"--- Processing Device: {hostname} ({ip_address}) ---")
 
-            # 1. Ping the IP address
             f_main_log.write(f"Attempting to ping {ip_address}...\n")
             print(f"Attempting to ping {ip_address}...")
             try:
@@ -169,35 +160,32 @@ def run_commands_and_extract_info(input_csv_file, commands):
                 f_error_log.write(f"{datetime.datetime.now()}: Ping error for {hostname} ({ip_address}): {e}\n")
                 continue
 
-            # 2. Attempt SSH connection using Paramiko
             f_main_log.write(f"Attempting SSH connection to {ip_address} using Paramiko...\n")
             print(f"Attempting SSH connection to {ip_address} using Paramiko...")
             client = None
             channel = None
             try:
                 client = paramiko.SSHClient()
-                client.set_missing_host_key_policy(paramiko.AutoAddPolicy()) # Auto add host keys
-                client.connect(hostname=ip_address, username=username, password=password, timeout=10)
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(hostname=ip_address, username=username, password=password, timeout=10, look_for_keys=False, allow_agent=False)
 
                 channel = client.invoke_shell()
-                time.sleep(0.5) # Give some time for the shell to open and banner to appear
-                initial_output = read_until_prompt(channel, prompt='>|#') # Read initial prompt
+                time.sleep(0.5)
+                initial_output = read_until_prompt(channel, prompt='>|#')
 
                 f_main_log.write(f"Initial shell output:\n{initial_output}\n")
                 print(f"Successfully connected to {hostname} ({ip_address})")
 
-                # Check if already in enable mode, if not, try to enter
                 if not initial_output.strip().endswith('#'):
                     f_main_log.write("Attempting to enter enable mode.\n")
                     print("Attempting to enter enable mode.")
-                    send_command_and_read(channel, "enable", prompt='Password:') # Send enable, expect password prompt
-                    enable_output = send_command_and_read(channel, enable_password, prompt='#') # Send enable password, expect enable prompt
+                    send_command_and_read(channel, "enable", prompt='Password:')
+                    enable_output = send_command_and_read(channel, enable_password, prompt='#')
                     if not enable_output.strip().endswith('#'):
                         raise paramiko.SSHException("Failed to enter enable mode. Check enable password.")
                     f_main_log.write("Entered enable mode.\n")
                     print("Entered enable mode.")
 
-                # Disable pagination
                 send_command_and_read(channel, "terminal length 0", prompt='#')
                 f_main_log.write("Disabled pagination (terminal length 0).\n")
                 print("Disabled pagination (terminal length 0).")
@@ -205,17 +193,15 @@ def run_commands_and_extract_info(input_csv_file, commands):
 
                 show_version_output = ""
                 show_ip_int_brief_output_for_ip = ""
-                last_command_output = "" # For the CSV column
+                show_ip_arp_output_for_ip = "" # New variable for ARP output
+                last_command_output = ""
 
-                # Execute commands one by one
                 for i, command_template in enumerate(commands):
                     command_to_execute = command_template
 
-                    # Handle dynamic variables
                     if "{IP_ADDR_VAR}" in command_template:
                         command_to_execute = command_template.replace("{IP_ADDR_VAR}", ip_address)
                     elif "{INTERFACE_NAME_VAR}" in command_template:
-                        # This command should only be executed if interface name is known
                         if not device['Interface Name']:
                             f_main_log.write(f"Skipping command '{command_template}': Interface name not yet discovered for {ip_address}.\n")
                             print(f"Skipping command '{command_template}': Interface name not yet discovered for {ip_address}.")
@@ -228,13 +214,14 @@ def run_commands_and_extract_info(input_csv_file, commands):
                     f_main_log.write(f"Command Output:\n{output}\n")
                     print(f"Command Output:\n{output}")
 
-                    # Store specific command outputs for parsing
                     if "show version" in command_to_execute.lower() and "terminal length" not in command_to_execute.lower():
                         show_version_output = output
                     if "show ip interface brief" in command_to_execute.lower() and ip_address in command_to_execute:
                         show_ip_int_brief_output_for_ip = output
+                    # Store output for 'show ip arp'
+                    if "show ip arp" in command_to_execute.lower() and ip_address in command_to_execute:
+                        show_ip_arp_output_for_ip = output
 
-                    # If this is the last command in the original list, store its output for CSV's "Last Command Output"
                     if i == len(commands) - 1:
                         last_command_output = output.strip()
 
@@ -242,31 +229,44 @@ def run_commands_and_extract_info(input_csv_file, commands):
                 device['IOS Version'] = parse_ios_version(show_version_output)
                 device['Serial Number'] = parse_serial_number(show_version_output)
 
-                # Extract Interface Name (crucial for subsequent MAC discovery)
+                # Attempt primary interface discovery
                 extracted_interface = parse_interface_name(show_ip_int_brief_output_for_ip, ip_address)
-                device['Interface Name'] = extracted_interface
 
-                # Now, if we found an interface, we can try to get its MAC
-                if extracted_interface and extracted_interface != "N/A": # Ensure it's a valid interface
-                    # Dynamically run 'show interface <interface_name>' to get MAC
-                    f_main_log.write(f"Dynamically executing: show interface {extracted_interface}\n")
-                    print(f"Dynamically executing: show interface {extracted_interface}")
-                    mac_detail_output = send_command_and_read(channel, f"show interface {extracted_interface}", prompt='#')
-                    f_main_log.write(f"Command Output (show interface {extracted_interface}):\n{mac_detail_output}\n")
-                    print(f"Command Output (show interface {extracted_interface}):\n{mac_detail_output}")
+                # Fallback to ARP if primary fails
+                if extracted_interface == "N/A":
+                    f_main_log.write(f"Interface not found via 'show ip int brief' for {ip_address}. Attempting 'show ip arp'.\n")
+                    print(f"Interface not found via 'show ip int brief' for {ip_address}. Attempting 'show ip arp'.")
+                    extracted_interface = parse_interface_from_arp(show_ip_arp_output_for_ip, ip_address)
+                    if extracted_interface != "N/A":
+                        f_main_log.write(f"Interface '{extracted_interface}' found via 'show ip arp' for {ip_address}.\n")
+                        print(f"Interface '{extracted_interface}' found via 'show ip arp' for {ip_address}.")
+                        device['Interface Name'] = extracted_interface
+                    else:
+                        f_main_log.write(f"Interface not found via 'show ip arp' either for {ip_address}.\n")
+                        print(f"Interface not found via 'show ip arp' either for {ip_address}.")
+                        device['Interface Name'] = "N/A - Both Methods Failed"
+                else:
+                    device['Interface Name'] = extracted_interface
+
+
+                # Now, if we have an interface, get its MAC
+                if device['Interface Name'] and device['Interface Name'] != "N/A" and "Failed" not in device['Interface Name']:
+                    f_main_log.write(f"Dynamically executing: show interface {device['Interface Name']}\n")
+                    print(f"Dynamically executing: show interface {device['Interface Name']}")
+                    mac_detail_output = send_command_and_read(channel, f"show interface {device['Interface Name']}", prompt='#')
+                    f_main_log.write(f"Command Output (show interface {device['Interface Name']}):\n{mac_detail_output}\n")
+                    print(f"Command Output (show interface {device['Interface Name']}):\n{mac_detail_output}")
                     device['Base MAC Address'] = parse_mac_from_show_interface(mac_detail_output)
                 else:
-                    f_main_log.write(f"Could not determine primary interface for {ip_address}. Skipping MAC address retrieval.\n")
-                    print(f"Could not determine primary interface for {ip_address}. Skipping MAC address retrieval.")
-                    device['Base MAC Address'] = "N/A - Interface Not Found"
+                    f_main_log.write(f"No valid interface name to retrieve MAC for {ip_address}.\n")
+                    print(f"No valid interface name to retrieve MAC for {ip_address}.")
+                    device['Base MAC Address'] = "N/A - Interface Unknown"
 
-                # Reset terminal length (optional but good practice)
                 send_command_and_read(channel, "terminal no length", prompt='#')
                 f_main_log.write("Reset terminal length.\n")
 
-
                 device['Status'] = 'Success'
-                device['Last Command Output'] = last_command_output # Assign the last command's output
+                device['Last Command Output'] = last_command_output
 
             except paramiko.AuthenticationException:
                 device['Status'] = 'Authentication Failed'
@@ -292,7 +292,6 @@ def run_commands_and_extract_info(input_csv_file, commands):
                 if client:
                     client.close()
 
-    # 3. Write all collected data to the new CSV
     try:
         with open(output_csv_file, mode='w', newline='', encoding='utf-8') as outfile:
             writer = csv.DictWriter(outfile, fieldnames=output_fieldnames)
@@ -304,7 +303,7 @@ def run_commands_and_extract_info(input_csv_file, commands):
         with open(error_log_file, 'a') as f_error:
             f_error.write(f"{datetime.datetime.now()}: Error writing output CSV file: {e}\n")
 
-# --- Parsing Functions (remain mostly the same, adjusted for potential output differences) ---
+# --- Parsing Functions ---
 def parse_ios_version(output):
     """Parses Cisco IOS version from 'show version' output."""
     match = re.search(r"Version\s+([\d\w\.]+),", output, re.IGNORECASE)
@@ -317,7 +316,7 @@ def parse_serial_number(output):
     match = re.search(r"Processor board ID\s+(\S+)", output, re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    match = re.search(r"Serial Number\s+:\s+(\S+)", output, re.IGNORECASE) # For devices that use this format
+    match = re.search(r"Serial Number\s+:\s+(\S+)", output, re.IGNORECASE)
     if match:
         return match.group(1).strip()
     return "N/A"
@@ -325,12 +324,22 @@ def parse_serial_number(output):
 def parse_interface_name(output, ip_address):
     """
     Parses the interface name from 'show ip interface brief | include <IP>' output.
-    Assumes the IP address is directly included in the command for filtering.
     """
     ip_regex = re.escape(ip_address)
-    # This regex is made more robust to handle various spaces and status columns.
-    # It looks for interface name at the start of the line, followed by the IP.
+    # Match interface at start, followed by IP, then typical status
     match = re.search(r"^(\S+)\s+" + ip_regex + r"\s+(?:YES|NO|unassigned)\s+(?:manual|NVRAM|unset)\s+(up|down|administratively down)\s+(up|down)", output, re.MULTILINE | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return "N/A"
+
+def parse_interface_from_arp(output, ip_address):
+    """
+    Parses the interface name from 'show ip arp | include <IP>' output.
+    """
+    ip_regex = re.escape(ip_address)
+    # Match the IP, then capture the last word (interface name) on the line
+    # (?:Internet|FastEthernet|Vlan)\s+ - optional protocol/type, adjust if needed
+    match = re.search(r"\s+" + ip_regex + r"\s+\S+\s+\S+\s+\S+\s+(\S+)$", output, re.MULTILINE | re.IGNORECASE)
     if match:
         return match.group(1).strip()
     return "N/A"
@@ -338,9 +347,7 @@ def parse_interface_name(output, ip_address):
 def parse_mac_from_show_interface(output):
     """
     Parses the MAC address from 'show interface <interface>' output.
-    Looks for "address is AAAA.BBBB.CCCC (bia AAAA.BBBB.CCCC)" or similar patterns.
     """
-    # Look for "address is" followed by the MAC (4.4.4 format)
     match = re.search(r"address is\s+([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})", output, re.IGNORECASE)
     if match:
         return match.group(1).upper()
@@ -349,17 +356,13 @@ def parse_mac_from_show_interface(output):
 if __name__ == "__main__":
     input_devices_csv = "devices.csv"
 
-    # Define the commands you want to run on the switches.
-    # {IP_ADDR_VAR} will be replaced by the device's IP address.
-    # {INTERFACE_NAME_VAR} will be dynamically determined and replaced by the script for the 'show interface' command.
-    # The LAST command's output will populate the 'Last Command Output' column in the CSV.
     switch_commands = [
-        "terminal length 0", # Ensure no pagination
-        "show version",      # For IOS Version, Serial Number
-        "show ip interface brief | include {IP_ADDR_VAR}", # For finding the interface name for the IP
-        # Note: "show interface {INTERFACE_NAME_VAR}" is executed dynamically by the script after interface discovery
+        "terminal length 0",
+        "show version",
+        "show ip interface brief | include {IP_ADDR_VAR}", # Primary method for interface discovery
+        "show ip arp | include {IP_ADDR_VAR}",             # Fallback method for interface discovery
         "show interface status", # Example: This output will be saved as 'Last Command Output'
-        "terminal no length" # Reset pagination
+        "terminal no length"
     ]
 
     run_commands_and_extract_info(input_devices_csv, switch_commands)
