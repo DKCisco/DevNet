@@ -193,20 +193,18 @@ def run_commands_and_extract_info(input_csv_file, commands):
 
                 show_version_output = ""
                 show_ip_int_brief_output_for_ip = ""
-                show_ip_arp_output_for_ip = "" # New variable for ARP output
+                show_ip_arp_output_for_ip = ""
                 last_command_output = ""
 
+                # Execute static commands and capture relevant output
                 for i, command_template in enumerate(commands):
                     command_to_execute = command_template
 
                     if "{IP_ADDR_VAR}" in command_template:
                         command_to_execute = command_template.replace("{IP_ADDR_VAR}", ip_address)
                     elif "{INTERFACE_NAME_VAR}" in command_template:
-                        if not device['Interface Name']:
-                            f_main_log.write(f"Skipping command '{command_template}': Interface name not yet discovered for {ip_address}.\n")
-                            print(f"Skipping command '{command_template}': Interface name not yet discovered for {ip_address}.")
-                            continue
-                        command_to_execute = command_template.replace("{INTERFACE_NAME_VAR}", device['Interface Name'])
+                         # This command should never be in the static list, as it's dynamic
+                        continue
 
                     f_main_log.write(f"Executing command: {command_to_execute}\n")
                     print(f"Executing command: {command_to_execute}")
@@ -218,39 +216,55 @@ def run_commands_and_extract_info(input_csv_file, commands):
                         show_version_output = output
                     if "show ip interface brief" in command_to_execute.lower() and ip_address in command_to_execute:
                         show_ip_int_brief_output_for_ip = output
-                    # Store output for 'show ip arp'
                     if "show ip arp" in command_to_execute.lower() and ip_address in command_to_execute:
                         show_ip_arp_output_for_ip = output
 
                     if i == len(commands) - 1:
                         last_command_output = output.strip()
 
-                # --- After all commands, perform parsing ---
-                device['IOS Version'] = parse_ios_version(show_version_output)
-                device['Serial Number'] = parse_serial_number(show_version_output)
+                # --- Interface Discovery and Loopback Fallback Logic ---
+                initial_discovered_interface = "N/A"
 
-                # Attempt primary interface discovery
-                extracted_interface = parse_interface_name(show_ip_int_brief_output_for_ip, ip_address)
+                # 1. Try 'show ip int brief | include {IP}'
+                if show_ip_int_brief_output_for_ip:
+                    initial_discovered_interface = parse_interface_name(show_ip_int_brief_output_for_ip, ip_address)
 
-                # Fallback to ARP if primary fails
-                if extracted_interface == "N/A":
+                # 2. If that fails, try 'show ip arp | include {IP}'
+                if initial_discovered_interface == "N/A" and show_ip_arp_output_for_ip:
                     f_main_log.write(f"Interface not found via 'show ip int brief' for {ip_address}. Attempting 'show ip arp'.\n")
                     print(f"Interface not found via 'show ip int brief' for {ip_address}. Attempting 'show ip arp'.")
-                    extracted_interface = parse_interface_from_arp(show_ip_arp_output_for_ip, ip_address)
-                    if extracted_interface != "N/A":
-                        f_main_log.write(f"Interface '{extracted_interface}' found via 'show ip arp' for {ip_address}.\n")
-                        print(f"Interface '{extracted_interface}' found via 'show ip arp' for {ip_address}.")
-                        device['Interface Name'] = extracted_interface
+                    initial_discovered_interface = parse_interface_from_arp(show_ip_arp_output_for_ip, ip_address)
+                    if initial_discovered_interface != "N/A":
+                        f_main_log.write(f"Interface '{initial_discovered_interface}' found via 'show ip arp' for {ip_address}.\n")
+                        print(f"Interface '{initial_discovered_interface}' found via 'show ip arp' for {ip_address}.")
                     else:
                         f_main_log.write(f"Interface not found via 'show ip arp' either for {ip_address}.\n")
                         print(f"Interface not found via 'show ip arp' either for {ip_address}.")
-                        device['Interface Name'] = "N/A - Both Methods Failed"
-                else:
-                    device['Interface Name'] = extracted_interface
 
+                device['Interface Name'] = initial_discovered_interface # Tentative assignment
 
-                # Now, if we have an interface, get its MAC
-                if device['Interface Name'] and device['Interface Name'] != "N/A" and "Failed" not in device['Interface Name']:
+                # 3. Check for Loopback and find a suitable physical interface
+                if device['Interface Name'].lower().startswith("loopback") and device['Interface Name'] != "N/A":
+                    f_main_log.write(f"Loopback interface '{device['Interface Name']}' detected for {ip_address}. Searching for a physical interface with an IP.\n")
+                    print(f"Loopback interface '{device['Interface Name']}' detected for {ip_address}. Searching for a physical interface with an IP.")
+
+                    # Execute full 'show ip interface brief' to get all interfaces
+                    full_ip_int_brief_output = send_command_and_read(channel, "show ip interface brief", prompt='#')
+                    f_main_log.write(f"Full 'show ip interface brief' output for physical interface search:\n{full_ip_int_brief_output}\n")
+
+                    physical_interface = find_non_loopback_active_interface(full_ip_int_brief_output)
+
+                    if physical_interface != "N/A":
+                        device['Interface Name'] = physical_interface
+                        f_main_log.write(f"Found suitable physical interface '{physical_interface}' for MAC retrieval.\n")
+                        print(f"Found suitable physical interface '{physical_interface}' for MAC retrieval.")
+                    else:
+                        device['Interface Name'] = "N/A - Loopback detected, no suitable physical interface found"
+                        f_main_log.write(f"No suitable physical interface found for {ip_address} after loopback detection.\n")
+                        print(f"No suitable physical interface found for {ip_address} after loopback detection.")
+
+                # --- MAC Address Retrieval (based on final 'Interface Name') ---
+                if device['Interface Name'] and "N/A" not in device['Interface Name'] and "Failed" not in device['Interface Name']:
                     f_main_log.write(f"Dynamically executing: show interface {device['Interface Name']}\n")
                     print(f"Dynamically executing: show interface {device['Interface Name']}")
                     mac_detail_output = send_command_and_read(channel, f"show interface {device['Interface Name']}", prompt='#')
@@ -338,11 +352,38 @@ def parse_interface_from_arp(output, ip_address):
     """
     ip_regex = re.escape(ip_address)
     # Match the IP, then capture the last word (interface name) on the line
-    # (?:Internet|FastEthernet|Vlan)\s+ - optional protocol/type, adjust if needed
+    # (?:Protocol\s+)?(Internet|ARPA)\s+ is optional capture for protocol if header is sometimes present
+    # \s+\S+\s+\S+\s+\S+\s+ are placeholders for Age, Hardware Addr, Type
     match = re.search(r"\s+" + ip_regex + r"\s+\S+\s+\S+\s+\S+\s+(\S+)$", output, re.MULTILINE | re.IGNORECASE)
     if match:
         return match.group(1).strip()
     return "N/A"
+
+def find_non_loopback_active_interface(output):
+    """
+    Parses 'show ip interface brief' output to find the first non-loopback,
+    IP-assigned, up/up interface.
+    """
+    lines = output.splitlines()
+    # Skip header lines
+    data_lines = [line for line in lines if not line.strip().startswith(('Interface', 'Protocol')) and line.strip()]
+
+    for line in data_lines:
+        parts = line.split()
+        if len(parts) >= 6: # Expect at least Interface, IP-Address, OK?, Method, Status, Protocol
+            interface_name = parts[0]
+            ip_address = parts[1]
+            status_line = parts[4].lower() # e.g., 'up' or 'down'
+            protocol_status = parts[5].lower() # e.g., 'up' or 'down'
+
+            # Check if it's not a loopback, has an IP, and is up/up
+            if not interface_name.lower().startswith("loopback") and \
+               ip_address != "unassigned" and \
+               status_line == "up" and \
+               protocol_status == "up":
+                return interface_name.strip()
+    return "N/A"
+
 
 def parse_mac_from_show_interface(output):
     """
