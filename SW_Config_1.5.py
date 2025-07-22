@@ -72,16 +72,6 @@ def main():
                 log_output.write(f"Successfully connected to {ip_address}\n")
                 print(f"  Connected to {ip_address}")
 
-                # Get and log hostname
-                hostname_output = net_connect.send_command('sh run | i hostname')
-                log_output.write(f"  Hostname: {hostname_output.strip()}\n")
-                print(f"  Hostname: {hostname_output.strip()}")
-
-                # Get and log inventory (model information)
-                inventory_output = net_connect.send_command('sh inv')
-                log_output.write(f"  Inventory:\n{inventory_output}\n")
-                print(f"  Retrieved inventory for {ip_address}")
-
                 # Push configuration commands
                 print(f"  Pushing configuration to {ip_address}...")
                 output = net_connect.send_config_set(config_commands)
