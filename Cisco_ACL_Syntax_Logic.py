@@ -1,149 +1,120 @@
-import netmiko
-import getpass
-import re
+from netmiko import ConnectHandler
+import maskpass
+import logging
+from datetime import datetime
 import os
 
-# --- User Inputs ---
-username = input("Enter SSH username: ")
-password = getpass.getpass("Enter SSH password: ") # getpass hides input for security
+# Create a timestamp for unique file naming
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# --- File Paths ---
-ip_list_file = "ips.txt"
-acl_2960x_isr_file = "acl_2960x_isr.txt"  # ACL for 2960X and ISR4331
-acl_9200_file = "acl_9200.txt"            # ACL for Catalyst 9200
-log_file = "network_device_log.txt"
-error_log_file = "ssh_error_log.txt"
+# Configure logging to save debug output to a file
+logging.basicConfig(filename='netmiko_debug.log', level=logging.DEBUG,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Load ACLs ---
-def load_acl_from_file(filepath):
-    """Loads ACL commands from a text file."""
-    try:
-        with open(filepath, 'r') as f:
-            return [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-    except FileNotFoundError:
-        print(f"Error: ACL file '{filepath}' not found. Please create it.")
-        return []
+def run_script_on_device(device_ip, admin_creds_list, admin_pw, failed_attempts, search_strings):
+    """
+    Connects to a network device, runs a command, and logs output based on search strings.
 
-acl_2960x_isr_commands = load_acl_from_file(acl_2960x_isr_file)
-acl_9200_commands = load_acl_from_file(acl_9200_file)
+    Args:
+        device_ip (str): The IP address of the device to connect to.
+        admin_creds_list (list): A list of usernames to attempt for authentication.
+        admin_pw (str): The password for authentication.
+        failed_attempts (list): A list to store error messages for failed connections.
+        search_strings (list): A list of strings to search for in the command output.
+    """
+    # Device connection parameters for Netmiko
+    device_params = {
+        'device_type': 'cisco_ios', # Generic Cisco IOS device type
+        'ip': device_ip,
+        'global_delay_factor': 10,  # Increase delay factor for slower devices/connections
+    }
 
-# --- Main Logic ---
-def main():
-    if not acl_2960x_isr_commands:
-        print(f"Warning: No ACL commands loaded from '{acl_2960x_isr_file}'. ACLs for 2960X/ISR will not be applied.")
-    if not acl_9200_commands:
-        print(f"Warning: No ACL commands loaded from '{acl_9200_file}'. ACLs for 9200 will not be applied.")
+    # Iterate through each username to attempt connection
+    for admin_creds in admin_creds_list:
+        device_params['username'] = admin_creds
+        device_params['password'] = admin_pw
 
-    # Initialize log files
-    with open(log_file, "w") as log_output:
-        log_output.write("--- Network Device Connection and Configuration Log ---\n\n")
+        try:
+            # Establish SSH connection
+            print(f"Attempting to connect to {device_ip} with username '{admin_creds}'...")
+            net_connect = ConnectHandler(**device_params)
+            net_connect.enable() # Enter enable mode
+            
+            # Send the command and capture output
+            print(f"Running command on {device_ip}...")
+            output = net_connect.send_command('show ip access-list | b SNMP_ACL')
+            net_connect.disconnect() # Disconnect from the device
 
-    with open(error_log_file, "w") as error_output:
-        error_output.write("--- SSH Connection Error Log ---\n\n")
+            # Check if any of the search strings are present in the output
+            found_any_string = False
+            for s_string in search_strings:
+                if s_string in output:
+                    found_any_string = True
+                    break # Found at least one, no need to check further
 
-    try:
-        with open(ip_list_file, "r") as f:
-            ip_addresses = [ip.strip() for ip in f if ip.strip()]
-    except FileNotFoundError:
-        print(f"Error: IP list file '{ip_list_file}' not found. Please create it.")
-        return
+            # Determine the appropriate file name based on whether strings were found
+            if found_any_string:
+                save_file_name = f"SNMP_Found_{timestamp}.txt"
+            else:
+                save_file_name = f"SNMP_NotFound_{timestamp}.txt"
+            
+            # Define the output directory and ensure it exists
+            output_dir = "SNMP_Output_Files"
+            os.makedirs(output_dir, exist_ok=True) # Create directory if it doesn't exist
+            full_path = os.path.join(output_dir, save_file_name) # Full path for the output file
 
-    for ip_address in ip_addresses:
-        print(f"Processing IP: {ip_address}")
-        with open(log_file, "a") as log_output, open(error_log_file, "a") as error_output:
-            log_output.write(f"Attempting connection to IP: {ip_address}\n")
+            # Write the device IP and command output to the determined file
+            with open(full_path, "a") as save_file:
+                save_file.write(f"--- Device IP: {device_ip} ---\n")
+                save_file.write(f"{output}\n\n")
 
-            device_info = {
-                'device_type': 'cisco_ios', # Netmiko device type for Cisco IOS
-                'host': ip_address,
-                'username': username,
-                'password': password,
-            }
-
-            net_connect = None # Initialize net_connect to None
-
-            try:
-                net_connect = netmiko.ConnectHandler(**device_info)
-                log_output.write(f"Successfully connected to {ip_address}\n")
-                print(f"  Connected to {ip_address}")
-
-                # Get hostname
-                hostname_output = net_connect.send_command('sh run | i hostname')
-                log_output.write(f"  Hostname: {hostname_output.strip()}\n")
-                print(f"  Hostname: {hostname_output.strip()}")
-
-                # Get inventory (model information)
-                inventory_output = net_connect.send_command('sh inv')
-                log_output.write(f"  Inventory:\n{inventory_output}\n")
-                print(f"  Retrieved inventory for {ip_address}")
-
-                device_model = "Unknown"
-                acl_applied = "None"
-
-                # Check device model and apply ACL accordingly
-                if re.search(r'WS-C2960X', inventory_output, re.IGNORECASE):
-                    device_model = "Cisco Catalyst 2960X"
-                    log_output.write("  Detected Model: Cisco Catalyst 2960X\n")
-                    if acl_2960x_isr_commands:
-                        print(f"  Applying 2960X/ISR ACL to {ip_address}...")
-                        output = net_connect.send_config_set(acl_2960x_isr_commands)
-                        log_output.write(f"  ACL applied (2960X/ISR syntax):\n{output}\n")
-                        print(f"  ACL applied to {ip_address}")
-                        acl_applied = "2960X/ISR"
-                    else:
-                        log_output.write(f"  Skipping ACL application for 2960X. No commands loaded from '{acl_2960x_isr_file}'.\n")
-                        print(f"  Skipping ACL for {ip_address} (2960X/ISR commands not loaded).")
-
-                elif re.search(r'ISR4331', inventory_output, re.IGNORECASE):
-                    device_model = "Cisco ISR 4331"
-                    log_output.write("  Detected Model: Cisco ISR 4331\n")
-                    if acl_2960x_isr_commands:
-                        print(f"  Applying 2960X/ISR ACL to {ip_address}...")
-                        output = net_connect.send_config_set(acl_2960x_isr_commands)
-                        log_output.write(f"  ACL applied (2960X/ISR syntax):\n{output}\n")
-                        print(f"  ACL applied to {ip_address}")
-                        acl_applied = "2960X/ISR"
-                    else:
-                        log_output.write(f"  Skipping ACL application for ISR4331. No commands loaded from '{acl_2960x_isr_file}'.\n")
-                        print(f"  Skipping ACL for {ip_address} (2960X/ISR commands not loaded).")
-
-                elif re.search(r'C9200', inventory_output, re.IGNORECASE):
-                    device_model = "Cisco Catalyst 9200"
-                    log_output.write("  Detected Model: Cisco Catalyst 9200\n")
-                    if acl_9200_commands:
-                        print(f"  Applying 9200 ACL to {ip_address}...")
-                        output = net_connect.send_config_set(acl_9200_commands)
-                        log_output.write(f"  ACL applied (9200 syntax):\n{output}\n")
-                        print(f"  ACL applied to {ip_address}")
-                        acl_applied = "9200"
-                    else:
-                        log_output.write(f"  Skipping ACL application for C9200. No commands loaded from '{acl_9200_file}'.\n")
-                        print(f"  Skipping ACL for {ip_address} (9200 commands not loaded).")
-                else:
-                    log_output.write("  Detected Model: Other/Unknown Cisco Device. No specific ACL applied.\n")
-                    print(f"  Other/Unknown Cisco device: {ip_address}. No specific ACL applied.")
-
-                log_output.write(f"  Final Status: Model={device_model}, ACL Applied={acl_applied}\n")
-
-            except netmiko.NetmikoTimeoutException:
-                log_output.write(f"  SSH Failure: Timeout when connecting to {ip_address}\n")
-                error_output.write(f"{ip_address}: Timeout\n")
-                print(f"  Timeout for {ip_address}, skipping.")
-            except netmiko.NetmikoAuthenticationException:
-                log_output.write(f"  SSH Failure: Authentication failed for {ip_address}\n")
-                error_output.write(f"{ip_address}: Authentication Failed\n")
-                print(f"  Authentication failed for {ip_address}, skipping.")
-            except Exception as e:
-                log_output.write(f"  SSH Failure: An unexpected error occurred with {ip_address}: {e}\n")
-                error_output.write(f"{ip_address}: Unexpected Error - {e}\n")
-                print(f"  Unexpected error with {ip_address}: {e}, skipping.")
-            finally:
-                if net_connect:
-                    net_connect.disconnect()
-                    log_output.write(f"  Disconnected from {ip_address}\n")
-                log_output.write("-" * 40 + "\n\n")
-
-    print(f"\nScript finished. Check '{log_file}' for details and '{error_log_file}' for SSH failures.")
+            print(f"Output from {device_ip} processed. Saved to: {full_path}")
+            break  # Connection and processing successful, exit the username loop
+        except Exception as e:
+            # Log and print error message for failed attempts
+            error_message = (f"Failed to connect to or authenticate with {device_ip} "
+                             f"using username '{admin_creds}'. Error: {e}")
+            logging.error(error_message) # Log the error
+            print(error_message)
+            failed_attempts.append(error_message) # Add error to failed attempts list
+    else:
+        # This 'else' block executes if the loop completes without a 'break'
+        # meaning all usernames failed for the current device.
+        print(f"All authentication attempts failed for {device_ip}.")
 
 if __name__ == "__main__":
-    main()
+    # List to store IP addresses read from a file
+    ip_addresses = []
+    try:
+        with open('BL_2960.txt', 'r') as f:
+            for line in f:
+                ip_addresses.append(line.strip()) # Read each IP, remove whitespace
+    except FileNotFoundError:
+        print("Error: 'BL_2960.txt' not found. Please create this file with one IP per line.")
+        exit() # Exit if the IP list file is not found
+
+    # Prompt user for usernames (comma-separated) and password
+    admin_creds_list = input('Enter the username(s) separated by commas: ').split(',')
+    admin_pw = maskpass.askpass(prompt="Enter PW: ", mask="#*")
+
+    # Define the list of strings to search for in the command output
+    # Customize this list with the specific strings you need to find.
+    search_strings = ['10.189.', '192.168.', '172.16.', '10.10.10.'] 
+
+    # List to store error messages for devices that could not be connected to
+    failed_attempts = []
+
+    # Iterate through each IP address and run the script
+    for ip in ip_addresses:
+        run_script_on_device(ip, admin_creds_list, admin_pw, failed_attempts, search_strings)
+
+    # After processing all IPs, write any failed attempts to a separate log file
+    if failed_attempts:
+        failed_log_path = os.path.join("SNMP_Output_Files", f"{timestamp}_failed_connections.txt")
+        with open(failed_log_path, "w") as f_failed:
+            f_failed.write("--- Failed Connection Attempts ---\n")
+            for error_message in failed_attempts:
+                f_failed.write(error_message + "\n")
+        print(f"\nSummary: {len(failed_attempts)} device(s) failed to connect. See '{failed_log_path}' for details.")
+    else:
+        print("\nSummary: All devices processed successfully with no connection failures.")
