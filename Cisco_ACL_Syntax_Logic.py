@@ -8,7 +8,7 @@ username = input("Enter SSH username: ")
 password = getpass.getpass("Enter SSH password: ") # getpass hides input for security
 
 # --- File Paths ---
-ip_list_file = "device_ips.txt"
+ip_list_file = "ips.txt"
 acl_2960x_isr_file = "acl_2960x_isr.txt"  # ACL for 2960X and ISR4331
 acl_9200_file = "acl_9200.txt"            # ACL for Catalyst 9200
 log_file = "network_device_log.txt"
