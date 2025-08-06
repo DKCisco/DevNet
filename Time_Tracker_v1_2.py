@@ -226,7 +226,9 @@ class TimeTrackerApp(tk.Tk):
                 total_minutes = total_seconds / 60
                 sheet.cell(row=current_row, column=1, value=task)
                 sheet.cell(row=current_row, column=2, value=total_seconds)
-                sheet.cell(row=current_row, column=3, value=total_minutes)
+                # Apply number format for minutes
+                minute_cell = sheet.cell(row=current_row, column=3, value=total_minutes)
+                minute_cell.number_format = '0.00' # <--- CHANGE THIS LINE
                 daily_total_seconds += total_seconds
 
                 # Apply row coloring based on task (simple alternating or specific)
@@ -249,7 +251,9 @@ class TimeTrackerApp(tk.Tk):
             # Summary row for Total Seconds
             sheet.cell(row=current_row, column=1, value="Total Seconds")
             sheet.cell(row=current_row, column=2, value=daily_total_seconds)
-            sheet.cell(row=current_row, column=3, value=daily_total_minutes) # Display total minutes here too for clarity
+            # Apply number format for total minutes
+            total_minutes_cell_1 = sheet.cell(row=current_row, column=3, value=daily_total_minutes) # Display total minutes here too for clarity
+            total_minutes_cell_1.number_format = '0.00' # <--- CHANGE THIS LINE
             summary_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid") # Light purple/blue
             for col_idx in range(1, len(headers) + 1):
                 sheet.cell(row=current_row, column=col_idx).fill = summary_fill
@@ -257,8 +261,12 @@ class TimeTrackerApp(tk.Tk):
 
             # Summary row for Total Minutes/Hours
             sheet.cell(row=current_row, column=1, value="Total Minutes")
-            sheet.cell(row=current_row, column=2, value=daily_total_minutes)
-            sheet.cell(row=current_row, column=3, value=daily_total_hours) # Display total hours here
+            # Apply number format for total minutes
+            total_minutes_cell_2 = sheet.cell(row=current_row, column=2, value=daily_total_minutes)
+            total_minutes_cell_2.number_format = '0.00' # <--- CHANGE THIS LINE
+            # Apply number format for total hours
+            total_hours_cell = sheet.cell(row=current_row, column=3, value=daily_total_hours) # Display total hours here
+            total_hours_cell.number_format = '0.00' # <--- CHANGE THIS LINE
             for col_idx in range(1, len(headers) + 1):
                 sheet.cell(row=current_row, column=col_idx).fill = summary_fill
             current_row += 1
@@ -266,7 +274,9 @@ class TimeTrackerApp(tk.Tk):
             # Summary row for Net Hours (after 1hr lunch)
             sheet.cell(row=current_row, column=1, value="Net Hours (after 1hr lunch)")
             sheet.cell(row=current_row, column=2, value=net_hours_after_lunch * 3600) # Convert back to seconds for consistency
-            sheet.cell(row=current_row, column=3, value=net_hours_after_lunch)
+            # Apply number format for net hours
+            net_hours_cell = sheet.cell(row=current_row, column=3, value=net_hours_after_lunch)
+            net_hours_cell.number_format = '0.00' # <--- CHANGE THIS LINE
             net_hours_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid") # Light orange/yellow
             net_hours_font = Font(bold=True)
             for col_idx in range(1, len(headers) + 1):
