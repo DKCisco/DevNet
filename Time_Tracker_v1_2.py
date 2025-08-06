@@ -14,7 +14,7 @@ class TimeTrackerApp(tk.Tk):
     and saves the time spent on each task to a daily Excel file with
     a new tab for each day. It also displays the total time spent on
     each task for the current day and includes daily summary calculations
-    with a 1-hour lunch deduction.
+    with a dynamic lunch deduction.
     """
     def __init__(self):
         super().__init__()
@@ -26,7 +26,7 @@ class TimeTrackerApp(tk.Tk):
 
         # --- Window Configuration ---
         self.title("Advanced Time Tracker")
-        self.geometry("480x400") # Slightly larger to accommodate more info
+        self.geometry("500x450") # Slightly larger to accommodate new lunch options
         self.resizable(False, False)
         self.configure(bg="#f0f0f0")
 
@@ -36,6 +36,8 @@ class TimeTrackerApp(tk.Tk):
         self.current_task = ""
         self.total_times = {} # Stores {task_name: total_seconds_for_task} for the current day
         self.elapsed_seconds = 0
+        self.lunch_taken_var = tk.BooleanVar(self) # Variable for the lunch checkbox
+        self.lunch_duration_minutes = 0 # Stores the calculated lunch duration in minutes
 
         # --- UI Element Creation ---
         self.create_widgets()
@@ -67,11 +69,33 @@ class TimeTrackerApp(tk.Tk):
         self.stop_button = tk.Button(button_frame, text="Stop", command=self.stop_timer, width=18, bg="#F44336", fg="white", font=("Helvetica", 12, "bold"), state=tk.DISABLED, relief=tk.RAISED, bd=3)
         self.stop_button.pack(side=tk.RIGHT, padx=10)
 
+        # Lunch Options Frame
+        lunch_frame = tk.Frame(main_frame, bg="#f0f0f0")
+        lunch_frame.pack(pady=(15, 5))
+
+        self.lunch_checkbox = tk.Checkbutton(lunch_frame, text="Took Lunch?", variable=self.lunch_taken_var,
+                                             command=self.toggle_lunch_duration_entry,
+                                             font=("Helvetica", 12), bg="#f0f0f0")
+        self.lunch_checkbox.pack(side=tk.LEFT, padx=(0, 10))
+
+        lunch_duration_label = tk.Label(lunch_frame, text="Duration (minutes):", font=("Helvetica", 12), bg="#f0f0f0")
+        lunch_duration_label.pack(side=tk.LEFT)
+        self.lunch_duration_entry = tk.Entry(lunch_frame, width=10, font=("Helvetica", 12), state=tk.DISABLED)
+        self.lunch_duration_entry.pack(side=tk.LEFT)
+        self.lunch_duration_entry.insert(0, "60") # Default to 60 minutes
+
         # Totals Display
         totals_label = tk.Label(main_frame, text="Today's Tracked Tasks:", font=("Helvetica", 12, "underline"), bg="#f0f0f0")
         totals_label.pack(pady=(15, 5))
         self.totals_text = tk.Text(main_frame, height=6, width=45, state=tk.DISABLED, bg="#ffffff", font=("Helvetica", 10), bd=1, relief="solid")
         self.totals_text.pack()
+
+    def toggle_lunch_duration_entry(self):
+        """Enables or disables the lunch duration entry based on checkbox state."""
+        if self.lunch_taken_var.get():
+            self.lunch_duration_entry.config(state=tk.NORMAL)
+        else:
+            self.lunch_duration_entry.config(state=tk.DISABLED)
 
     def get_sheet_name(self):
         """Generates the sheet name based on the current date."""
@@ -97,7 +121,7 @@ class TimeTrackerApp(tk.Tk):
                         duration_seconds = sheet.cell(row=row_idx, column=2).value
                         if task_name and isinstance(duration_seconds, (int, float)):
                             # Only load actual task entries, not summary rows
-                            if task_name not in ["Total Seconds", "Total Minutes", "Total Hours", "Net Hours (after 1hr lunch)"]:
+                            if task_name not in ["Total Seconds", "Total Minutes", "Total Hours", "Net Hours (after lunch)"]:
                                 self.total_times[task_name] = self.total_times.get(task_name, 0) + int(duration_seconds)
                 print(f"Successfully loaded existing data for '{sheet_name}'.")
             except Exception as e:
@@ -124,6 +148,10 @@ class TimeTrackerApp(tk.Tk):
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.task_entry.config(state=tk.DISABLED)
+        # Disable lunch options while timer is running
+        self.lunch_checkbox.config(state=tk.DISABLED)
+        self.lunch_duration_entry.config(state=tk.DISABLED)
+
 
         self.elapsed_seconds = 0
         self.update_timer_display()
@@ -144,12 +172,32 @@ class TimeTrackerApp(tk.Tk):
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         self.task_entry.config(state=tk.NORMAL)
+        # Re-enable lunch options
+        self.lunch_checkbox.config(state=tk.NORMAL)
+        self.toggle_lunch_duration_entry() # Set state based on checkbox
 
         # Update total time for the task in memory
         self.total_times[self.current_task] = self.total_times.get(self.current_task, 0) + elapsed_seconds
 
+        # Get lunch deduction amount
+        lunch_deduction_seconds = 0
+        if self.lunch_taken_var.get():
+            try:
+                lunch_minutes = float(self.lunch_duration_entry.get().strip())
+                if lunch_minutes < 0:
+                    messagebox.showwarning("Invalid Input", "Lunch duration cannot be negative. Setting to 0.")
+                    lunch_minutes = 0
+                lunch_deduction_seconds = int(lunch_minutes * 60)
+                self.lunch_duration_minutes = lunch_minutes # Store for display if needed
+            except ValueError:
+                messagebox.showerror("Input Error", "Please enter a valid number for lunch duration (minutes). Setting to 0.")
+                lunch_deduction_seconds = 0
+                self.lunch_duration_minutes = 0
+        else:
+            self.lunch_duration_minutes = 0
+
         # Save the record and update totals in the Excel file
-        self.save_to_excel()
+        self.save_to_excel(lunch_deduction_seconds)
 
         # Update the GUI totals display
         self.update_totals_display()
@@ -182,13 +230,13 @@ class TimeTrackerApp(tk.Tk):
                 self.totals_text.insert(tk.END, f"{task}: {time_string}\n")
         self.totals_text.config(state=tk.DISABLED)
 
-    def save_to_excel(self):
+    def save_to_excel(self, lunch_deduction_seconds):
         """
         Saves all tracked tasks for the current day to an Excel sheet,
-        including calculated totals and lunch deduction.
+        including calculated totals and dynamic lunch deduction.
         """
         sheet_name = self.get_sheet_name()
-        print(f"Saving data to Excel sheet: '{sheet_name}'")
+        print(f"Saving data to Excel sheet: '{sheet_name}' with lunch deduction of {lunch_deduction_seconds} seconds.")
 
         workbook = None
         try:
@@ -228,7 +276,7 @@ class TimeTrackerApp(tk.Tk):
                 sheet.cell(row=current_row, column=2, value=total_seconds)
                 # Apply number format for minutes
                 minute_cell = sheet.cell(row=current_row, column=3, value=total_minutes)
-                minute_cell.number_format = '0.00' # <--- CHANGE THIS LINE
+                minute_cell.number_format = '0.00'
                 daily_total_seconds += total_seconds
 
                 # Apply row coloring based on task (simple alternating or specific)
@@ -243,7 +291,8 @@ class TimeTrackerApp(tk.Tk):
             # --- Write Summary Calculations ---
             daily_total_minutes = daily_total_seconds / 60
             daily_total_hours = daily_total_minutes / 60
-            net_hours_after_lunch = daily_total_hours - 1 # Deduct 1 hour (3600 seconds) for lunch
+
+            net_hours_after_lunch = daily_total_hours - (lunch_deduction_seconds / 3600) # Deduct dynamic lunch
 
             # Add a blank row for separation
             current_row += 1
@@ -253,7 +302,7 @@ class TimeTrackerApp(tk.Tk):
             sheet.cell(row=current_row, column=2, value=daily_total_seconds)
             # Apply number format for total minutes
             total_minutes_cell_1 = sheet.cell(row=current_row, column=3, value=daily_total_minutes) # Display total minutes here too for clarity
-            total_minutes_cell_1.number_format = '0.00' # <--- CHANGE THIS LINE
+            total_minutes_cell_1.number_format = '0.00'
             summary_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid") # Light purple/blue
             for col_idx in range(1, len(headers) + 1):
                 sheet.cell(row=current_row, column=col_idx).fill = summary_fill
@@ -263,20 +312,21 @@ class TimeTrackerApp(tk.Tk):
             sheet.cell(row=current_row, column=1, value="Total Minutes")
             # Apply number format for total minutes
             total_minutes_cell_2 = sheet.cell(row=current_row, column=2, value=daily_total_minutes)
-            total_minutes_cell_2.number_format = '0.00' # <--- CHANGE THIS LINE
+            total_minutes_cell_2.number_format = '0.00'
             # Apply number format for total hours
             total_hours_cell = sheet.cell(row=current_row, column=3, value=daily_total_hours) # Display total hours here
-            total_hours_cell.number_format = '0.00' # <--- CHANGE THIS LINE
+            total_hours_cell.number_format = '0.00'
             for col_idx in range(1, len(headers) + 1):
                 sheet.cell(row=current_row, column=col_idx).fill = summary_fill
             current_row += 1
 
-            # Summary row for Net Hours (after 1hr lunch)
-            sheet.cell(row=current_row, column=1, value="Net Hours (after 1hr lunch)")
+            # Summary row for Net Hours (after dynamic lunch)
+            lunch_label = f"Net Hours (after {self.lunch_duration_minutes}min lunch)" if self.lunch_taken_var.get() else "Net Hours (no lunch deducted)"
+            sheet.cell(row=current_row, column=1, value=lunch_label)
             sheet.cell(row=current_row, column=2, value=net_hours_after_lunch * 3600) # Convert back to seconds for consistency
             # Apply number format for net hours
             net_hours_cell = sheet.cell(row=current_row, column=3, value=net_hours_after_lunch)
-            net_hours_cell.number_format = '0.00' # <--- CHANGE THIS LINE
+            net_hours_cell.number_format = '0.00'
             net_hours_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid") # Light orange/yellow
             net_hours_font = Font(bold=True)
             for col_idx in range(1, len(headers) + 1):
