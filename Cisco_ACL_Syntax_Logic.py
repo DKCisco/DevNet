@@ -86,11 +86,11 @@ if __name__ == "__main__":
     # List to store IP addresses read from a file
     ip_addresses = []
     try:
-        with open('BL_2960.txt', 'r') as f:
+        with open('2960.txt', 'r') as f:
             for line in f:
                 ip_addresses.append(line.strip()) # Read each IP, remove whitespace
     except FileNotFoundError:
-        print("Error: 'BL_2960.txt' not found. Please create this file with one IP per line.")
+        print("Error: '2960.txt' not found. Please create this file with one IP per line.")
         exit() # Exit if the IP list file is not found
 
     # Prompt user for usernames (comma-separated) and password
