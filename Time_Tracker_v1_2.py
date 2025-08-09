@@ -298,7 +298,7 @@ class TimeTrackerApp(tk.Tk):
             current_row += 1
             
             # Summary row for Total Seconds
-            sheet.cell(row=current_row, column=1, value="Total Seconds")
+            sheet.cell(row=current_row, column=1, value="Total")
             sheet.cell(row=current_row, column=2, value=daily_total_seconds)
             # Apply number format for total minutes
             total_minutes_cell_1 = sheet.cell(row=current_row, column=3, value=daily_total_minutes) # Display total minutes here too for clarity
@@ -309,7 +309,7 @@ class TimeTrackerApp(tk.Tk):
             current_row += 1
 
             # Summary row for Total Minutes/Hours
-            sheet.cell(row=current_row, column=1, value="Total Minutes")
+            sheet.cell(row=current_row, column=1, value="Total")
             # Apply number format for total minutes
             total_minutes_cell_2 = sheet.cell(row=current_row, column=2, value=daily_total_minutes)
             total_minutes_cell_2.number_format = '0.00'
