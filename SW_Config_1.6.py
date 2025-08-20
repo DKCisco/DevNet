@@ -5,12 +5,12 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import re
 import os
-import config # Import the configuration file for cred variables
+import config # Import the configuration file
 
 # --- File Paths ---
 # These paths can remain here or be moved to config.py as well.
 LOG_FILE_PATH = 'script_output.log'
-IP_LIST_FILENAME = 'ip_addresses.txt'
+IP_LIST_FILENAME = "ip_address.txt"
 
 
 # --- Helper Functions ---
@@ -87,23 +87,18 @@ def ssh_to_switch(ip, username, password, commands):
         initial_response = channel.recv(65535).decode('utf-8')
         output += f"--- Initial Response from {ip} ---\n{initial_response}\n"
 
-        # This function waits for the command prompt before sending the next command
-        def wait_for_prompt(prompt_regex=r"[\w.-]+[>#]\s*$"):
-            buffer = ""
-            while not re.search(prompt_regex, buffer.split('\n')[-1]):
-                if channel.recv_ready():
-                    buffer += channel.recv(1024).decode('utf-8')
-                time.sleep(0.1)
-            return buffer
-
-        # Execute each command
+        # Execute each command with a fixed delay
         for command in commands:
             print(f"Sending command to {ip}: {command}")
             channel.send(command + "\n")
-            # Wait for the command to execute and capture the output
-            command_output = wait_for_prompt()
-            output += f"\n--- Command: '{command}' ---\n{command_output}"
-            time.sleep(1) # Small delay between commands
+            # Wait for a fixed amount of time for the command to execute.
+            # Adjust this value if your devices are slower or faster.
+            time.sleep(5)
+            # Capture the output after the delay
+            if channel.recv_ready():
+                 command_output = channel.recv(65535).decode('utf-8')
+                 output += f"\n--- Output for Command: '{command}' ---\n{command_output}"
+
 
         print(f"Finished commands for {ip}.")
         channel.close()
@@ -136,9 +131,12 @@ def main():
     # The final '' (empty string) sends an Enter key press to confirm the save.
     commands_to_run = [
         'conf t',
-        'do wr mem',
-        '',
-        'end'
+        'service password-encryption',
+        'end',
+        'copy run start',
+        'startup-config',
+        'end',
+        '' # Sends 'Enter' to confirm the save
     ]
 
     # --- Check for IP address file ---
