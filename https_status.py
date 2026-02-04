@@ -41,7 +41,7 @@ def check_https_status(websites):
         time.sleep(60)
 
 # List of websites to check
-websites = ["https://www.google.org", "https://www.github.com/"]
+websites = ["https://www.google.com", "https://www.github.com/"]
 
 # Suppress only the single InsecureRequestWarning from urllib3 needed
 requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
