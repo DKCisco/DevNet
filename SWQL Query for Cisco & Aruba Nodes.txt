@@ -1,0 +1,11 @@
+SELECT
+    Nodes.NodeID,
+    Nodes.Caption AS Hostname,
+    Nodes.IPAddress,
+    Nodes.Vendor,
+    Nodes.MachineType,
+    Nodes.DNS,
+    Nodes.SysName
+FROM Orion.Nodes AS Nodes
+WHERE Nodes.Vendor IN ('Cisco', 'Aruba Networks Inc')
+ORDER BY Nodes.Vendor, Nodes.Caption
