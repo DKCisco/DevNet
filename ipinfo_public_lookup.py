@@ -11,7 +11,7 @@ ip_addresses = ['8.8.8.8',
                 '8.8.8.8',
                 '8.8.8.8',]  # replace with your list of IP addresses
 
-token = '66eb0b339ea987'  # replace with your token from IPinfo
+token = ''  # replace with your token from IPinfo
 
 for ip in ip_addresses:
     location = get_location(ip, token)
